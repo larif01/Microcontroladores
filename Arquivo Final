@@ -1,0 +1,543 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "stdio.h"
+#include "string.h"
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define LM75A_ADDR       (0x48 << 1)
+#define TEMP_REG         0x00
+#define EEPROM_ADDR      (0xA0 << 1) // 24LC256
+#define EEPROM_INDEX_ADDR 0x0000     // write_index (2 bytes)
+#define EEPROM_SEQ_ADDR   0x0002     // sequence_number (2 bytes)
+#define EEPROM_BUFFER_BASE 0x0004    // Buffer circular
+#define BUFFER_SIZE      256         // 256 posições
+#define ENTRY_SIZE       3           // 2 bytes (seq) + 1 byte (temp)
+#define BUTTON_LIST_PIN  GPIO_PIN_15  // PB0: Listar buffer
+#define BUTTON_RESET_PIN GPIO_PIN_7  // PB1: Reiniciar buffer
+#define BUTTON_NEXT_PIN  GPIO_PIN_2  // PB2: Não usado
+#define BUTTON_PREV_PIN  GPIO_PIN_3  // PB3: Não usado
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+
+I2C_HandleTypeDef hi2c2;
+
+TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim4;
+
+UART_HandleTypeDef huart1;
+
+/* USER CODE BEGIN PV */
+char msg[32];
+
+const uint8_t digit_segments[10] = {
+  0b00111111, 0b00000110, 0b01011011, 0b01001111,
+  0b01100110, 0b01101101, 0b01111101, 0b00000111,
+  0b01111111, 0b01101111
+};
+
+GPIO_TypeDef* digit_ports[4] = {GPIOB, GPIOB, GPIOB, GPIOB};
+uint16_t digit_pins[4] = {GPIO_PIN_12, GPIO_PIN_13, GPIO_PIN_14, GPIO_PIN_15};
+
+volatile int display_temp = 0;
+volatile uint16_t write_index = 0;
+volatile uint16_t sequence_number = 0;
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_ADC1_Init(void);
+static void MX_TIM1_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_TIM4_Init(void);
+static void MX_I2C2_Init(void);
+/* USER CODE BEGIN PFP */
+int __io_putchar(int ch)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+    return ch;
+}
+
+float read_temperature(void) {
+    uint8_t temp_raw[2];
+    if (HAL_I2C_Mem_Read(&hi2c2, LM75A_ADDR, TEMP_REG, I2C_MEMADD_SIZE_8BIT, temp_raw, 2, 100) != HAL_OK) {
+        printf("LM75A read error\r\n");
+        return -1.0f; // Valor inválido
+    }
+    int16_t temp_val = (int16_t)((temp_raw[0] << 8) | temp_raw[1]);
+    temp_val >>= 7; // LM75A: 9-bit resolution
+    float temp = temp_val * 0.5f;
+    if (temp < -55.0f || temp > 125.0f) { // Faixa do LM75A
+        printf("Temperatura fora da faixa: %.1fC\r\n", temp);
+        return -1.0f;
+    }
+    return temp;
+}
+
+void eeprom_write(uint16_t mem_addr, uint8_t *data, uint16_t size) {
+    if (HAL_I2C_Mem_Write(&hi2c2, EEPROM_ADDR, mem_addr, I2C_MEMADD_SIZE_16BIT, data, size, 100) != HAL_OK) {
+        printf("EEPROM write error\r\n");
+    }
+    HAL_Delay(5); // Atraso para escrita
+}
+
+void eeprom_read(uint16_t mem_addr, uint8_t *data, uint16_t size) {
+    if (HAL_I2C_Mem_Read(&hi2c2, EEPROM_ADDR, mem_addr, I2C_MEMADD_SIZE_16BIT, data, size, 100) != HAL_OK) {
+        printf("EEPROM read error\r\n");
+    }
+}
+
+void save_temperature(int temp) {
+    if (temp < 0 || temp > 99) {
+        printf("Temperatura fora do limite: %dC\r\n", temp);
+        return;
+    }
+    uint8_t data[3] = {
+        (uint8_t)(sequence_number & 0xFF),
+        (uint8_t)((sequence_number >> 8) & 0xFF),
+        (uint8_t)temp
+    };
+    uint16_t addr = EEPROM_BUFFER_BASE + (write_index * ENTRY_SIZE);
+    eeprom_write(addr, data, ENTRY_SIZE);
+    write_index = (write_index + 1) % BUFFER_SIZE;
+    sequence_number++;
+    uint8_t index_data[2] = {
+        (uint8_t)(write_index & 0xFF),
+        (uint8_t)((write_index >> 8) & 0xFF)
+    };
+    eeprom_write(EEPROM_INDEX_ADDR, index_data, 2);
+    uint8_t seq_data[2] = {
+        (uint8_t)(sequence_number & 0xFF),
+        (uint8_t)((sequence_number >> 8) & 0xFF)
+    };
+    eeprom_write(EEPROM_SEQ_ADDR, seq_data, 2);
+    printf("Saved: Seq=%u, Temp=%dC, Index=%u\r\n", sequence_number - 1, temp, write_index - 1);
+}
+
+void read_saved_temperature(uint16_t index, uint16_t *seq, uint8_t *temp) {
+    if (index >= BUFFER_SIZE) {
+        *seq = 0;
+        *temp = 0;
+        return;
+    }
+    uint8_t data[3];
+    uint16_t addr = EEPROM_BUFFER_BASE + (index * ENTRY_SIZE);
+    eeprom_read(addr, data, ENTRY_SIZE);
+    *seq = (uint16_t)(data[1] << 8 | data[0]);
+    *temp = data[2];
+}
+
+void display_buffer(void) {
+    printf("Exibindo buffer circular:\r\n");
+    for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
+        uint16_t seq;
+        uint8_t temp;
+        read_saved_temperature(i, &seq, &temp);
+        if (seq == 0 && temp == 0 && i > 0) continue;
+        printf("Index=%u, Seq=%u, Temp=%uC\r\n", i, seq, temp);
+    }
+    printf("Fim do buffer\r\n");
+}
+
+void reset_buffer(void) {
+    write_index = 0;
+    sequence_number = 0;
+    uint8_t zero[2] = {0, 0};
+    eeprom_write(EEPROM_INDEX_ADDR, zero, 2);
+    eeprom_write(EEPROM_SEQ_ADDR, zero, 2);
+    uint8_t empty[ENTRY_SIZE] = {0, 0, 0};
+    for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
+        eeprom_write(EEPROM_BUFFER_BASE + (i * ENTRY_SIZE), empty, ENTRY_SIZE);
+    }
+    printf("Buffer reiniciado\r\n");
+}
+
+void handle_buttons(void) {
+    static uint32_t last_list = 0, last_reset = 0;
+    uint32_t now = HAL_GetTick();
+
+    if (HAL_GPIO_ReadPin(GPIOA, BUTTON_LIST_PIN) == GPIO_PIN_RESET && now - last_list > 200) {
+        display_buffer();
+        last_list = now;
+    }
+
+    if (HAL_GPIO_ReadPin(GPIOB, BUTTON_RESET_PIN) == GPIO_PIN_RESET && now - last_reset > 200) {
+        reset_buffer();
+        last_reset = now;
+    }
+}
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+char msg[] = "Hello via USART!\r\n";
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+  /* USER CODE BEGIN 1 */
+#ifdef DEBUG
+CoreDebug->DEMCR |= CoreDebug_DEMCR_MON_EN_Msk | CoreDebug_DEMCR_MON_PEND_Msk;
+DBGMCU->CR |= DBGMCU_CR_DBG_SLEEP | DBGMCU_CR_DBG_STOP | DBGMCU_CR_DBG_STANDBY;
+#endif
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+  uint8_t index_data[2];
+  eeprom_read(EEPROM_INDEX_ADDR, index_data, 2);
+  write_index = (uint16_t)(index_data[1] << 8 | index_data[0]);
+  if (write_index >= BUFFER_SIZE) write_index = 0;
+  uint8_t seq_data[2];
+  eeprom_read(EEPROM_SEQ_ADDR, seq_data, 2);
+  sequence_number = (uint16_t)(seq_data[1] << 8 | seq_data[0]);
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_ADC1_Init();
+  MX_TIM1_Init();
+  MX_USART1_UART_Init();
+  MX_TIM4_Init();
+  MX_I2C2_Init();
+  /* USER CODE BEGIN 2 */
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  printf("iniciando o loop\n");
+  while (1)
+  {
+      handle_buttons();
+
+      // Atualiza a cada 1 segundo
+      static uint32_t last_update = 0;
+      uint32_t now = HAL_GetTick();
+      if (now - last_update >= 1000) {
+          float temperature = read_temperature();
+          int temp_celsius = (int)temperature;
+          display_temp = temp_celsius; // Sincroniza com display
+          // Exibe no display
+          for (int i = 0; i < 100; i++) {
+              display_number(display_temp);
+          }
+          if (temp_celsius >= 0 && temp_celsius <= 99) {
+              printf("Temperatura: %dC\r\n", temp_celsius);
+              save_temperature(temp_celsius);
+          } else {
+              printf("Temperatura inválida: %dC\r\n", temp_celsius);
+          }
+          last_update = now;
+      }
+
+      HAL_Delay(10);
+
+    /* USER CODE END WHILE */
+    /* USER CODE BEGIN 3 */
+  }
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
+
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
+  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV8;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+  ADC_ChannelConfTypeDef sConfig = {0};
+  hadc1.Instance = ADC1;
+  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfig.Channel = ADC_CHANNEL_TEMPSENSOR;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief I2C2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C2_Init(void)
+{
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.ClockSpeed = 100000;
+  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 0;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 65535;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief TIM4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM4_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 0;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 65535;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim4, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3|
+                        GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = BUTTON_LIST_PIN | BUTTON_RESET_PIN | BUTTON_NEXT_PIN | BUTTON_PREV_PIN;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+}
+
+/* USER CODE BEGIN 4 */
+void display_number(int number) {
+    uint8_t digits[4];
+    if (number > 9999) number = 9999;
+    if (number < 0) number = 0;
+
+    digits[3] = (number / 1000) % 10;
+    digits[2] = (number / 100) % 10;
+    digits[1] = (number / 10) % 10;
+    digits[0] = number % 10;
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            HAL_GPIO_WritePin(GPIOB, digit_pins[j], GPIO_PIN_RESET);
+        }
+        uint8_t seg = digit_segments[digits[i]];
+        for (int bit = 0; bit < 8; bit++) {
+            HAL_GPIO_WritePin(GPIOA, (1 << bit), (seg & (1 << bit)) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        }
+        HAL_GPIO_WritePin(GPIOB, digit_pins[i], GPIO_PIN_SET);
+        HAL_Delay(2);
+        HAL_GPIO_WritePin(GPIOB, digit_pins[i], GPIO_PIN_RESET);
+    }
+}
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  __disable_irq();
+  while (1)
+  {
+  }
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+}
+#endif /* USE_FULL_ASSERT */
