@@ -11,7 +11,6 @@
 
 // Endereços fixos na EEPROM para armazenar índice de escrita e número de sequência
 #define EEPROM_INDEX_ADDR         0xFF00
-#define EEPROM_SEQNUM_ADDR        0xFF02
 
 // Definições de pinos
 #define SEGMENT_PORT        GPIOA
@@ -57,42 +56,31 @@ int main(void)
     uint8_t temp_data[TEMP_SIZE];
     uint8_t data[SEQUENCE_SIZE + TEMP_SIZE];
 
-    // Carregar índice e sequência do EEPROM no início para persistência
     load_persistent_data();
 
     while (1)
     {
-        // Leitura da temperatura
         if (read_temperature(temp_data) != HAL_OK)
         {
-            // Erro na leitura da temperatura: pisca LED de erro e aguarda
             Error_Handler();
         }
 
-        // Prepara os dados para escrita na EEPROM
-        data[0] = (uint8_t)(sequence_number >> 8);       // Número de sequência MSB
-        data[1] = (uint8_t)(sequence_number & 0xFF);     // LSB
-        data[2] = temp_data[0];                           // Temperatura
+        data[0] = (uint8_t)(sequence_number >> 8);
+        data[1] = (uint8_t)(sequence_number & 0xFF);
+        data[2] = temp_data[0];
 
-        // Escreve os dados na EEPROM no índice atual do buffer circular
         if (eeprom_write(write_index * (SEQUENCE_SIZE + TEMP_SIZE), data, SEQUENCE_SIZE + TEMP_SIZE) != HAL_OK)
         {
             Error_Handler();
         }
 
-        // Atualiza o buffer local (cache) não obrigatório, mas útil se quiser consultar rápido
-
-        // Incrementa índices
         write_index = (write_index + 1) % BUFFER_SIZE;
         sequence_number++;
 
-        // Salva índices atualizados na EEPROM para persistência
         save_persistent_data();
 
-        // Envia via UART a amostra
         send_data_uart(data, SEQUENCE_SIZE + TEMP_SIZE);
 
-        // Exibe no display de 7 segmentos a temperatura (parte inteira)
         display_number(temp_data[0]);
 
         HAL_Delay(1000);
@@ -104,7 +92,6 @@ void SystemClock_Config(void)
     RCC_OscInitTypeDef RCC_OscInitStruct = {0};
     RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-    // Configuração básica HSI
     RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
     RCC_OscInitStruct.HSIState = RCC_HSI_ON;
     RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
@@ -114,7 +101,7 @@ void SystemClock_Config(void)
         Error_Handler();
     }
 
-    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
     RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
     RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
     RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
@@ -129,38 +116,31 @@ void MX_GPIO_Init(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-    // Clocks dos GPIO
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOC_CLK_ENABLE();
 
-    // Configura botão 1 (PA15) com interrupção na borda de descida (pressão)
     GPIO_InitStruct.Pin = BUTTON1_PIN;
     GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(BUTTON1_PORT, &GPIO_InitStruct);
 
-    // Configura botão 2 (PA14) similar
     GPIO_InitStruct.Pin = BUTTON2_PIN;
     HAL_GPIO_Init(BUTTON2_PORT, &GPIO_InitStruct);
 
-    // Configura display 7 segmentos (todos pinos PA0-PA7) como saída push-pull
-    GPIO_InitStruct.Pin = 0x00FF; // PA0 até PA7
+    GPIO_InitStruct.Pin = 0x00FF; 
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(SEGMENT_PORT, &GPIO_InitStruct);
 
-    // Configuração LED erro PC13 saída push-pull
     GPIO_InitStruct.Pin = ERROR_LED_PIN;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(ERROR_LED_PORT, &GPIO_InitStruct);
 
-    // Inicial LED erro apagado (set = desligado, para muitos placas)
     HAL_GPIO_WritePin(ERROR_LED_PORT, ERROR_LED_PIN, GPIO_PIN_SET);
 
-    // Habilita NVIC para interrupções dos botões (linhas EXTI)
     HAL_NVIC_SetPriority(EXTI15_10_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
@@ -168,12 +148,13 @@ void MX_GPIO_Init(void)
 void MX_USART1_UART_Init(void)
 {
     huart1.Instance = USART1;
-    huart1.Init.BaudRate = 9600; // Ajustado para 9600 conforme o enunciado
+    huart1.Init.BaudRate = 9600;
     huart1.Init.WordLength = UART_WORDLENGTH_8B;
     huart1.Init.StopBits = UART_STOPBITS_1;
     huart1.Init.Parity = UART_PARITY_NONE;
     huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
     huart1.Init.Mode = UART_MODE_TX_RX;
+    huart1.Init.OverSampling = UART_OVERSAMPLING_16;
     if (HAL_UART_Init(&huart1) != HAL_OK)
     {
         Error_Handler();
@@ -199,78 +180,55 @@ void MX_I2C1_Init(void)
 
 void display_number(uint16_t number)
 {
-    // Implementação básica para mostrar 2 dígitos em 7 segmentos via 8 pinos GPIO (PA0-PA7)
-    // Vamos supor que cada segmento corresponda a um pino GPIO e codificar número 0-99
-
-    // Tabela de segmentos 7 segmentos para dígitos 0-9, segmentos: a,b,c,d,e,f,g,dp
-    // Supondo bit0 = segmento a ... bit6 = g, bit7 = dp (desligado)
     const uint8_t segment_map[10] = {
-        0x3F, // 0: abcdef
-        0x06, // 1: bc
-        0x5B, // 2: abdeg
-        0x4F, // 3: abcdg
-        0x66, // 4: bcfg
-        0x6D, // 5: acdfg
-        0x7D, // 6: acdefg
-        0x07, // 7: abc
-        0x7F, // 8: abcdefg
-        0x6F  // 9: abcdfg
+        0x3F,
+        0x06,
+        0x5B,
+        0x4F,
+        0x66,
+        0x6D,
+        0x7D,
+        0x07,
+        0x7F,
+        0x6F
     };
 
-    // Extrair dois dígitos
     uint8_t tens = (number / 10) % 10;
     uint8_t units = number % 10;
 
-    // Aqui, simples ciclo para acender segmentos nos dois displays via GPIO
-    // Se houver multiplexação, deve ser feita rotina diferente. Aqui consideramos GPIO direto para 2 displays.
-    // Por simplicidade, vamos multiplexar em software com delay curto.
-
-    // Exemplo implementativo simples (substituir conforme hardware real)
-
-    // exibe dezena
     HAL_GPIO_WritePin(SEGMENT_PORT, 0x00FF, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(SEGMENT_PORT, segment_map[tens], GPIO_PIN_SET);
     HAL_Delay(5);
 
-    // exibe unidade
     HAL_GPIO_WritePin(SEGMENT_PORT, 0x00FF, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(SEGMENT_PORT, segment_map[units], GPIO_PIN_SET);
     HAL_Delay(5);
 }
 
-// Leitura da temperatura do LM75A, retorna HAL_StatusTypeDef, temp_data com parte inteira da temperatura
 HAL_StatusTypeDef read_temperature(uint8_t* temp_data)
 {
     uint8_t temp_raw[2] = {0};
-
-    // Endereço LM75A para leitura da temperatura é 0x90 (escrita), 0x91 leitura. HAL_I2C_Mem_Read já cuida do RW.
-    // Registro temperatura é 0x00
     HAL_StatusTypeDef status = HAL_I2C_Mem_Read(&hi2c1, LM75A_ADDR, 0x00, I2C_MEMADD_SIZE_8BIT, temp_raw, 2, 100);
     if (status != HAL_OK)
         return status;
 
-    // Temperatura em LM75A: primeiro byte é a parte inteira, segundo o decimal (frac) em bits altos (não usamos)
     *temp_data = temp_raw[0];
-
     return HAL_OK;
 }
 
-// Escreve dado na EEPROM 24LC256, endereçamento 16-bit
 HAL_StatusTypeDef eeprom_write(uint16_t address, uint8_t* data, uint16_t size)
 {
     HAL_StatusTypeDef status = HAL_I2C_Mem_Write(&hi2c1, EEPROM_ADDR, address, I2C_MEMADD_SIZE_16BIT, data, size, 100);
-    HAL_Delay(5); // tempo de escrita interno EEPROM
+    HAL_Delay(5);
     return status;
 }
 
-// Leitura da EEPROM
 HAL_StatusTypeDef eeprom_read(uint16_t address, uint8_t* data, uint16_t size)
 {
     HAL_StatusTypeDef status = HAL_I2C_Mem_Read(&hi2c1, EEPROM_ADDR, address, I2C_MEMADD_SIZE_16BIT, data, size, 100);
     return status;
 }
 
-// Envio UART da amostra com formato "Amostra 00452: 27 °C\r\n"
 void send_data_uart(uint8_t* data, uint16_t size)
 {
     char buffer[64];
@@ -280,7 +238,6 @@ void send_data_uart(uint8_t* data, uint16_t size)
     HAL_UART_Transmit(&huart1, (uint8_t*)buffer, len, 100);
 }
 
-// Salvar índices write_index e sequence_number na EEPROM em endereço fixo para persistência
 void save_persistent_data(void)
 {
     uint8_t data[4];
@@ -291,7 +248,6 @@ void save_persistent_data(void)
     eeprom_write(EEPROM_INDEX_ADDR, data, 4);
 }
 
-// Ler índices persistentes da EEPROM na inicialização
 void load_persistent_data(void)
 {
     uint8_t data[4] = {0};
@@ -299,21 +255,16 @@ void load_persistent_data(void)
     {
         write_index = ((uint16_t)data[0] << 8) | data[1];
         sequence_number = ((uint16_t)data[2] << 8) | data[3];
-
-        // Validação simples para evitar valores inválidos
         if (write_index >= BUFFER_SIZE)
             write_index = 0;
     }
     else
     {
-        // Erro na leitura EEPROM, inicia do zero
         write_index = 0;
         sequence_number = 0;
     }
 }
 
-// Reinicia o buffer circular (zera dados) e índices, apaga EEPROM de histórico (escreve zeros)
-// O histórico é apagado escrevendo zeros nas 256 posições do buffer EEPROM
 void reset_buffer(void)
 {
     uint8_t empty_data[SEQUENCE_SIZE + TEMP_SIZE] = {0};
@@ -328,12 +279,10 @@ void reset_buffer(void)
     sequence_number = 0;
     save_persistent_data();
 
-    // Mensagem via UART que buffer foi resetado
     char msg[] = "Buffer reiniciado\r\n";
     HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 100);
 }
 
-// Exibe histórico via UART de forma ordenada crescente (i=0 até 255)
 void display_history(void)
 {
     char buffer[64];
@@ -342,9 +291,9 @@ void display_history(void)
 
     HAL_UART_Transmit(&huart1,(uint8_t*)header, strlen(header),100);
 
-    for (uint16_t i = 0; i < BUFFER_SIZE; i++)
+    for(uint16_t i=0; i<BUFFER_SIZE; i++)
     {
-        if (eeprom_read(i * (SEQUENCE_SIZE + TEMP_SIZE), data, SEQUENCE_SIZE + TEMP_SIZE) != HAL_OK)
+        if(eeprom_read(i * (SEQUENCE_SIZE + TEMP_SIZE), data, SEQUENCE_SIZE + TEMP_SIZE) != HAL_OK)
         {
             Error_Handler();
             return;
@@ -353,8 +302,7 @@ void display_history(void)
         uint16_t seq = ((uint16_t)data[0] << 8) | data[1];
         uint8_t temp = data[2];
 
-        // Pula dados vazios - assumindo seq=0 e temp=0 vazio
-        if (seq == 0 && temp == 0)
+        if(seq == 0 && temp == 0)
             continue;
 
         int len = snprintf(buffer, sizeof(buffer), "%05u: %d °C\r\n", seq, temp);
@@ -362,42 +310,36 @@ void display_history(void)
     }
 }
 
-// Callback da interrupção do botão (EXTI 15 a 10)
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-    if (GPIO_Pin == BUTTON1_PIN)
+    if(GPIO_Pin == BUTTON1_PIN)
     {
-        // Mostrar o histórico
         display_history();
     }
-    else if (GPIO_Pin == BUTTON2_PIN)
+    else if(GPIO_Pin == BUTTON2_PIN)
     {
-        // Resetar buffer circular
         reset_buffer();
     }
 }
 
-// Handler de erro: pisca LED erro e bloqueia programa
 void Error_Handler(void)
 {
-    while (1)
+    while(1)
     {
         HAL_GPIO_TogglePin(ERROR_LED_PORT, ERROR_LED_PIN);
         HAL_Delay(500);
     }
 }
 
-// Handler da interrupção EXTI (necessário para botões)
-// Cada linha EXTI é gerenciada por esta função para linhas 10..15
 void EXTI15_10_IRQHandler(void)
 {
     HAL_GPIO_EXTI_IRQHandler(BUTTON1_PIN);
     HAL_GPIO_EXTI_IRQHandler(BUTTON2_PIN);
 }
 
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 void assert_failed(uint8_t *file, uint32_t line)
 {
-    // Implementação personalizada para relatório de erros em assert
+    // Implementação para erro de assert
 }
 #endif
