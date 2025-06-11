@@ -1,9 +1,10 @@
 #include "main.h"
 #include <stdlib.h>
+#include <stdbool.h>
 
-#define velMIN 150
-#define velMED 100
-#define velMAX 50
+//#define velMIN 150
+//#define velMED 100
+//#define velMAX 50
 
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
@@ -12,30 +13,88 @@ static void MX_GPIO_Init(void);
 //Endereço 5 flag algum botão apertado
 bool flagsBotoes[6] = {false};
 bool flagsLEDs[5] = {false};
+int ultimoLED = -1;
 
-void verificaTodos() 
-{
-    // Se qualquer botão for pressionado (nível baixo), acende o LED
-	    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET ||
-	        HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET ||
-	        HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET ||
-	        HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET ||
-	        HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET)
-	    {
-	        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); // LED ON
-            flagsBotoes[5] = true;
-	    }
-	    else
-        {
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);   // LED OFF
-            flagsBotoes[5] = false;
+bool lerBotaoDebounce(GPIO_TypeDef* porta, uint16_t pino) {
+    if (HAL_GPIO_ReadPin(porta, pino) == GPIO_PIN_RESET) {
+        HAL_Delay(20);
+        if (HAL_GPIO_ReadPin(porta, pino) == GPIO_PIN_RESET) {
+            return true;
         }
+    }
+    return false;
+}
+
+void verificaTodos()
+{
+    const int tempoDebounce_ms = 20;
+    bool estadoAnterior = flagsBotoes[5];
+    uint32_t tempoInicial = HAL_GetTick();
+
+    while ((HAL_GetTick() - tempoInicial) < tempoDebounce_ms)
+    {
+        bool estadoAtual =
+            HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET ||
+            HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET ||
+            HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET ||
+            HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET ||
+            HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET;
+
+        if (estadoAtual != estadoAnterior)
+        {
+            // Houve oscilação, reinicia o tempo de debounce
+            estadoAnterior = estadoAtual;
+            tempoInicial = HAL_GetTick();
+        }
+    }
+
+    // Estado estável confirmado
+    if (estadoAnterior == true)
+    {
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); // LED ON
+        flagsBotoes[5] = true;
+    }
+    else
+    {
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); // LED OFF
+        flagsBotoes[5] = false;
+    }
 }
 
 void novoLED()
 {
-    for(int i = 0; i < 5; i++) flagsLEDs[i] = false;
-    flagsLEDs[(HAL_GetTick()) % 5] = true;
+    while (flagsBotoes[5] != false) {
+    	verificaTodos();
+    }
+
+    for(int i = 0; i < 5; i++) flagsBotoes[i] = false;
+
+    flagsLEDs[ultimoLED] = false;
+
+    int aux;
+    do {
+        aux = rand() % 5;
+    } while (aux == ultimoLED);
+    ultimoLED = aux;
+
+
+    flagsLEDs[ultimoLED] = true;
+
+
+    if (flagsLEDs[0] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
+    else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+
+    if (flagsLEDs[1] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+    else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
+
+    if (flagsLEDs[2] == true) HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);
+    else HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_RESET);
+
+    if (flagsLEDs[3] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+    else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+
+    if (flagsLEDs[4] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
+    else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
 }
 
 int main(void)
@@ -44,90 +103,39 @@ int main(void)
     SystemClock_Config();
     MX_GPIO_Init();
 
-    int pontuacao = 0;
+    srand(HAL_GetTick());
+
+    static int pontuacao = 0;
 
     while (1)
     {
-        int aux = 0;
-        if (flagsLEDs[aux] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET)
-        else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
-        aux += 1;
-        if (flagsLEDs[aux] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
-        else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
-        aux += 1;
-        if (flagsLEDs[aux] == true) HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);
-        else HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_RESET);
-        aux += 1;
-        if (flagsLEDs[aux] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
-        else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
-        aux += 1;
-        if (flagsLEDs[aux] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
-        else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
-        aux = 0;
 
         // PA0 → PB9
-        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET) {
-            flagsBotoes[0] = true;
-        } 
-        else 
-        {
-            flagsBotoes[0] = false;
-        }
+    	flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0);
 
         // PA1 → PB8
-        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET) {
-            flagsBotoes[1] = true;
-        } 
-        else 
-        {
-            flagsBotoes[1] = false;
-        }
+    	flagsBotoes[1] = lerBotaoDebounce(GPIOA, GPIO_PIN_1);
 
         // PA2 → PA10
-        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET) {
-            flagsBotoes[2] = true;
-        } 
-        else 
-        {
-            flagsBotoes[2] = false;
-        }
+    	flagsBotoes[2] = lerBotaoDebounce(GPIOA, GPIO_PIN_2);
 
         // PA3 → PB6
-        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET) {
-            flagsBotoes[3] = true;
-        } 
-        else 
-        {
-            flagsBotoes[3] = false;
-        }
+    	flagsBotoes[3] = lerBotaoDebounce(GPIOA, GPIO_PIN_3);
 
         // PA4 → PB5
-        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET) {
-            flagsBotoes[4] = true;
-        } 
-        else 
-        {
-            flagsBotoes[4] = false;
-        }
+    	flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
 
         verificaTodos();
 
-        // Antirruído simples
-        HAL_Delay(50);
-
         if (flagsBotoes[5] == true)
         {
-            while (flagsBotoes[5] != false) verificaTodos();
-            HAL_Delay(50);
 
             bool erro = false;
 
-            for(int i = 0; i < 5; i++)
+            for (int i = 0; i < 5; i++)
             {
                 if (flagsBotoes[i] != flagsLEDs[i]) erro = true;
             }
-
-            for(int i = 0; i < 5; i++) flagsBotoes[i] = false;    
 
             if (erro == false)
             {
@@ -138,9 +146,12 @@ int main(void)
                 //}
             }
 
+            erro = false;
+
             novoLED();
         }
     }
+    return 0;
 }
 
 void SystemClock_Config(void)
