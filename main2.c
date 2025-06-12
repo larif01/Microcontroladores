@@ -2,99 +2,88 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
-//#define velMIN 150
-//#define velMED 100
-//#define velMAX 50
-
 void SystemClock_Config(void);
+static void MX_GPIO_Display_Init(void);
 static void MX_GPIO_Init(void);
 
-//Endereços 0-4 botões individuais
-//Endereço 5 flag algum botão apertado
-bool flagsBotoes[6] = {false};
+bool flagsBotoes[5] = {false};
 bool flagsLEDs[5] = {false};
-int ultimoLED = -1;
+uint8_t pontuacao = 0;
 
-bool lerBotaoDebounce(GPIO_TypeDef* porta, uint16_t pino) {
-    if (HAL_GPIO_ReadPin(porta, pino) == GPIO_PIN_RESET) {
-        HAL_Delay(20);
-        if (HAL_GPIO_ReadPin(porta, pino) == GPIO_PIN_RESET) {
-            return true;
-        }
-    }
+bool lerBotaoDebounce(GPIO_TypeDef* porta, uint16_t pino)
+{
+    HAL_GPIO_ReadPin(porta, pino) == GPIO_PIN_RESET ? (HAL_Delay(20), HAL_GPIO_ReadPin(porta, pino) == GPIO_PIN_RESET ? return true);
     return false;
 }
 
-void verificaTodos()
+void inverteLED(int ultimoLED)
 {
-    const int tempoDebounce_ms = 20;
-    bool estadoAnterior = flagsBotoes[5];
-    uint32_t tempoInicial = HAL_GetTick();
-
-    while ((HAL_GetTick() - tempoInicial) < tempoDebounce_ms)
-    {
-        bool estadoAtual =
-            HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET ||
-            HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET ||
-            HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET ||
-            HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET ||
-            HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_4) == GPIO_PIN_RESET;
-
-        if (estadoAtual != estadoAnterior)
-        {
-            // Houve oscilação, reinicia o tempo de debounce
-            estadoAnterior = estadoAtual;
-            tempoInicial = HAL_GetTick();
-        }
-    }
-
-    // Estado estável confirmado
-    if (estadoAnterior == true)
-    {
-        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); // LED ON
-        flagsBotoes[5] = true;
-    }
-    else
-    {
-        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); // LED OFF
-        flagsBotoes[5] = false;
+    switch (ultimoLED) {
+        case 0: HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, flagsLEDs[0] ? GPIO_PIN_SET : GPIO_PIN_RESET); break;
+        case 1: HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, flagsLEDs[1] ? GPIO_PIN_SET : GPIO_PIN_RESET); break;
+        case 2: HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, flagsLEDs[2] ? GPIO_PIN_SET : GPIO_PIN_RESET); break;
+        case 3: HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, flagsLEDs[3] ? GPIO_PIN_SET : GPIO_PIN_RESET); break;
+        case 4: HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, flagsLEDs[4] ? GPIO_PIN_SET : GPIO_PIN_RESET); break;
     }
 }
 
 void novoLED()
 {
-    while (flagsBotoes[5] != false) {
-    	verificaTodos();
-    }
-
-    for(int i = 0; i < 5; i++) flagsBotoes[i] = false;
-
+	static int ultimoLED = -1;
     flagsLEDs[ultimoLED] = false;
-
+    inverteLED(ultimoLED);
     int aux;
     do {
-        aux = rand() % 5;
+    	aux = rand() % 5;
     } while (aux == ultimoLED);
     ultimoLED = aux;
-
-
     flagsLEDs[ultimoLED] = true;
+    inverteLED(ultimoLED);
+}
 
+void verificaPontos()
+{
+    static bool erro = false;
+    for (int i = 0; i < 5; i++) flagsBotoes[i] != flagsLEDs[i] ? erro = true, !erro ? pontuacao++, display_write(pontuacao), erro = false;
+    while ((flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4])) flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0), flagsBotoes[1] = lerBotaoDebounce(GPIOA, GPIO_PIN_1), flagsBotoes[2] = lerBotaoDebounce(GPIOA, GPIO_PIN_2), flagsBotoes[3] = lerBotaoDebounce(GPIOA, GPIO_PIN_3), flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
+}
 
-    if (flagsLEDs[0] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
-    else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+void send_byte(uint8_t data)
+{
+    for (int i = 7; i >= 0; i--) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, (data >> i) & 0x01), HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET), HAL_Delay(1), HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_RESET);      // SCLK LOW
+}
 
-    if (flagsLEDs[1] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
-    else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
+void latch()
+{
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_SET);    // LOAD HIGH
+	HAL_Delay(1);
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET);  // LOAD LOW
+}
 
-    if (flagsLEDs[2] == true) HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);
-    else HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_RESET);
+void display_write(uint8_t num)
+{
+	//Tabela de segmentos
+	const uint8_t digits[10] = {
+	    ~0b00111111, // 0
+	    ~0b00000110, // 1
+	    ~0b01011011, // 2
+	    ~0b01001111, // 3
+	    ~0b01100110, // 4
+	    ~0b01101101, // 5
+	    ~0b01111101, // 6
+	    ~0b00000111, // 7
+	    ~0b01111111, // 8
+	    ~0b01101111  // 9
+	};
+    send_byte(digits[num % 10]);     // primeiro o dígito da direita (unidade)
+    send_byte(digits[num / 10]);     // depois o da esquerda (dezena)
+    latch();
+}
 
-    if (flagsLEDs[3] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
-    else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
-
-    if (flagsLEDs[4] == true) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
-    else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
+void iniciaSistema() 
+{
+    pontuacao = 0;
+	display_write(pontuacao);
 }
 
 int main(void)
@@ -102,54 +91,17 @@ int main(void)
     HAL_Init();
     SystemClock_Config();
     MX_GPIO_Init();
-
+    MX_GPIO_Display_Init();
     srand(HAL_GetTick());
-
-    static int pontuacao = 0;
-
+    iniciaSistema();
     while (1)
     {
-
-        // PA0 → PB9
     	flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0);
-
-        // PA1 → PB8
     	flagsBotoes[1] = lerBotaoDebounce(GPIOA, GPIO_PIN_1);
-
-        // PA2 → PA10
     	flagsBotoes[2] = lerBotaoDebounce(GPIOA, GPIO_PIN_2);
-
-        // PA3 → PB6
     	flagsBotoes[3] = lerBotaoDebounce(GPIOA, GPIO_PIN_3);
-
-        // PA4 → PB5
     	flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
-
-        verificaTodos();
-
-        if (flagsBotoes[5] == true)
-        {
-
-            bool erro = false;
-
-            for (int i = 0; i < 5; i++)
-            {
-                if (flagsBotoes[i] != flagsLEDs[i]) erro = true;
-            }
-
-            if (erro == false)
-            {
-                pontuacao +=1;
-                //{
-                //print no 7 segmentos
-                //calculo de velocidade
-                //}
-            }
-
-            erro = false;
-
-            novoLED();
-        }
+        flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4] ? (verificaPontos(), novoLED());   //Verifica botões e desvia para ver resultado
     }
     return 0;
 }
@@ -175,6 +127,23 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
   HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2);
+}
+
+static void MX_GPIO_Display_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  GPIO_InitStruct.Pin = GPIO_PIN_10 | GPIO_PIN_11;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 }
 
 static void MX_GPIO_Init(void)
