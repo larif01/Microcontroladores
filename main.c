@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+//Constantes de tempo *100us
 #define DIFICULDADEMINIMA 14999
 #define DIFICULDADEMEDIA 9999
 #define DIFICULDADEMAXIMA 4999
@@ -23,16 +24,18 @@ static void MX_USART1_UART_Init(void);
 //Endereços 0-4 botões e LEDs individuais
 bool flagsBotoes[5] = {false};
 bool flagsLEDs[5] = {false};
+//Variável de pontuação Geral
 uint8_t pontuacao = 0;
+//Flags para as interrupções
 volatile bool flagResetPorTimeout = false;
 volatile bool flagMudaLED = false;
 
-bool lerBotaoDebounce(GPIO_TypeDef* porta, uint16_t pino)
+bool lerBotaoDebounce(GPIO_TypeDef* porta, uint16_t pino)	//Um debouce para os botões é necessário
 {
     if (HAL_GPIO_ReadPin(porta, pino) == GPIO_PIN_RESET)
     {
         HAL_Delay(20);
-        if (HAL_GPIO_ReadPin(porta, pino) == GPIO_PIN_RESET)
+        if (HAL_GPIO_ReadPin(porta, pino) == GPIO_PIN_RESET)	//Verifica estado em uma janela de tempo de 20ms
         {
             return true;
         }
@@ -40,7 +43,7 @@ bool lerBotaoDebounce(GPIO_TypeDef* porta, uint16_t pino)
     return false;
 }
 
-void novoLED()
+void novoLED()	//Para trocar o LED para um novo, verificamos o anterior, apagamos e criamos um novo diferente
 {
 	static int ultimoLED = -1;
     flagsLEDs[ultimoLED] = false;
@@ -69,7 +72,7 @@ void novoLED()
     else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
 }
 
-void send_byte(uint8_t data)
+void send_byte(uint8_t data)	//Viaja o vetor de segmentos, atualizando o número
 {
     for (int i = 7; i >= 0; i--) {
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, (data >> i) & 0x01);  // SDI
@@ -79,7 +82,7 @@ void send_byte(uint8_t data)
     }
 }
 
-void latch()
+void latch()	//É feito o LOAD nos displays
 {
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);    // LOAD HIGH
 	HAL_Delay(1);
@@ -87,9 +90,9 @@ void latch()
 
 }
 
-void display_write(uint8_t num)
+void display_write(uint8_t num)	//Para escrever nos displays, o numero atual da pontuação é passado
 {
-	//Tabela de segmentos
+	//Tabela de segmentos para cada número
 	const uint8_t digits[10] = {
 	    ~0b00111111, // 0
 	    ~0b00000110, // 1
@@ -111,14 +114,14 @@ void display_write(uint8_t num)
     latch();
 }
 
-void display_clear()
+void display_clear()	//Função rápida para apagar os 7 segmentos, não necessitando de parametros
 {
     send_byte(0xFF); // Apaga o dígito da direita
     send_byte(0xFF); // Apaga o dígito da esquerda
     latch();
 }
 
-void ajustarDificuldade()
+void ajustarDificuldade()	//Aqui se verifica se é necessário mudar a constante do counter do TIM2 
 {
     uint32_t novoPeriodo;
     if (pontuacao < 10)
@@ -129,7 +132,7 @@ void ajustarDificuldade()
         novoPeriodo = DIFICULDADEMAXIMA;
     else {
         // reinicia jogo
-        fimDeJogo();
+        fimDeJogo();	//Em caso de mais de 30 pontos, o jogo termina
         novoPeriodo = DIFICULDADEMINIMA;
     }
 
@@ -137,7 +140,7 @@ void ajustarDificuldade()
     __HAL_TIM_SET_COUNTER(&htim3, 0);
 }
 
-void resetPontos()
+void resetPontos()	//Reset da pontuação
 {
 	pontuacao = 0;
 	display_write(0);
@@ -145,6 +148,7 @@ void resetPontos()
 
 void fimDeJogo()
 {
+	//Pisca os 7 segmentos para avisar o jogador
 	for(int i = 0; i < 3; i++)
 	{
 		display_clear();
@@ -152,12 +156,12 @@ void fimDeJogo()
 		display_write(pontuacao);
 		HAL_Delay(500);
 	}
-	resetPontos();
+	resetPontos();	//Reinicia os pontos
 }
 
 int main(void)
 {
-	HAL_Init();
+    HAL_Init();
     SystemClock_Config();
     MX_GPIO_Init();
     MX_TIM2_Init();
@@ -170,22 +174,25 @@ int main(void)
     HAL_TIM_Base_Start_IT(&htim2);
     HAL_TIM_Base_Start_IT(&htim3);
 
+    //Inicia o sistema em 0, para se livrar de lixo de memória
     resetPontos();
 
     while (1)
     {
+	//verifica as flags
     	if (flagResetPorTimeout)
     	{
     	    const char* msg = "Inatividade detectada! Jogo reiniciado.\r\n";
     	    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
-    	    fimDeJogo();
+    	    fimDeJogo();	//Em caso de ociosidade por 10 segundos, o jogo é reiniciado
     	    flagResetPorTimeout = false;
     	}
     	if (flagMudaLED)
     	{
     		novoLED();
-    	    flagMudaLED = false;
+    	    flagMudaLED = false;	//Muda os LEDs depois da contagem de tempo atual
     	}
+	//Verifica-se as entradas (botões)
           // PA0
       	flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0);
           // PA1
@@ -197,27 +204,28 @@ int main(void)
           // PA4
       	flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
 
-      	//Verifica botões e desvia para ver resultado
+      	//Desvio para ver resultado
         if (flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4])
         {
         	uint32_t tempoResposta = __HAL_TIM_GET_COUNTER(&htim2);  // Tempo desde o novo LED
         	HAL_TIM_Base_Stop(&htim2); // Para o timer momentaneamente
-            bool erro = false;
+            bool erro = false;	//Flag de acerto
+		//Verifica se o botão acionado é o mesmo que o LED 
             for (int i = 0; i < 5; i++)
             {
-                if (flagsBotoes[i] != flagsLEDs[i]) erro = true;
+                if (flagsBotoes[i] != flagsLEDs[i]) erro = true; //Se LED == Botão, marca a flag de acerto
             }
 
             char msg[50];
-
+		//Desvio condicional de pontuação
             if (erro == false)
             {
-                pontuacao = pontuacao + 1;
-                ajustarDificuldade();
+                pontuacao = pontuacao + 1;	//Adiciona 1 ponto
+                ajustarDificuldade();		//Verifica a dificuldade atual
                 snprintf(msg, sizeof(msg), "Tempo: %lu ms\r\n", tempoResposta);
                 // Envia o número pela UART
                 char msg[10];
-                snprintf(msg, sizeof(msg), "%d\r\n", pontuacao);  // formata "num\n"
+                snprintf(msg, sizeof(msg), "%d\r\n", pontuacao);  // formata "pontuacao\n"
                 HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
             }
             else
@@ -225,9 +233,9 @@ int main(void)
             	snprintf(msg, sizeof(msg), "Erro! LED errado!\r\n");
             }
 
-            HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+            HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);	//Escreve para o usuário
 
-            display_write(pontuacao);
+            display_write(pontuacao);		//Atualiza displays
             erro = false;
           	//Garante que o jogador soltou os botões antes de continuar
           	while ((flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4]))
@@ -240,13 +248,13 @@ int main(void)
           	}
           	__HAL_TIM_SET_COUNTER(&htim2, 0);  // Zera cronômetro
           	HAL_TIM_Base_Start(&htim2);        // Reinicia para detectar inatividade
-            novoLED();
+            novoLED();	//Termina atualizando os LEDs
         }
     }
     return 0;
 }
 
-
+//Geração de clock
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -277,16 +285,15 @@ void SystemClock_Config(void)
   }
 }
 
-
-
+//Timer 2 conta a cada 200us
 static void MX_TIM2_Init(void)
 {
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 14399;
+  htim2.Init.Prescaler = 14399; 	// 72M / 14400 = 5000
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 49999;
+  htim2.Init.Period = 49999;		//50000 / 5000 = 10 segundos
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -306,6 +313,7 @@ static void MX_TIM2_Init(void)
   }
 }
 
+//Timer 3 conta a cada 100us
 static void MX_TIM3_Init(void)
 {
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
@@ -314,7 +322,7 @@ static void MX_TIM3_Init(void)
   __HAL_RCC_TIM3_CLK_ENABLE();
 
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 7199;
+  htim3.Init.Prescaler = 7199;	//72M / 7200 = 10000
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim3.Init.Period = DIFICULDADEMINIMA;  // Começa com dificuldade mínima (1500ms)
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -329,6 +337,7 @@ static void MX_TIM3_Init(void)
   HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig);
 }
 
+//Declaração de UART
 static void MX_USART1_UART_Init(void)
 {
   huart1.Instance = USART1;
@@ -345,6 +354,7 @@ static void MX_USART1_UART_Init(void)
   }
 }
 
+//Pinos dos displays de 7 segmentos
 static void MX_GPIO_Display_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -362,6 +372,7 @@ static void MX_GPIO_Display_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 
+//Declarações de GPIO
 static void MX_GPIO_Init(void)
 {
   __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -398,6 +409,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); // LED inicialmente apagado
 }
 
+//Interrupções dos Timers 2 e 3, modificando as flags
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM2)
