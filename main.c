@@ -1,19 +1,31 @@
 #include "main.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <stdbool.h>
 
+#define DIFICULDADEMINIMA 14999
+#define DIFICULDADEMEDIA 9999
+#define DIFICULDADEMAXIMA 4999
+
 TIM_HandleTypeDef htim2;
+
+TIM_HandleTypeDef htim3;
+
+UART_HandleTypeDef huart1;
 
 void SystemClock_Config(void);
 static void MX_GPIO_Display_Init(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_USART1_UART_Init(void);
 
 //Endereços 0-4 botões e LEDs individuais
 bool flagsBotoes[5] = {false};
 bool flagsLEDs[5] = {false};
 uint8_t pontuacao = 0;
 volatile bool flagResetPorTimeout = false;
+volatile bool flagMudaLED = false;
 
 bool lerBotaoDebounce(GPIO_TypeDef* porta, uint16_t pino)
 {
@@ -97,6 +109,30 @@ void display_write(uint8_t num)
     send_byte(digits[digit1]);     // primeiro o dígito da direita
     send_byte(digits[digit2]);     // depois o da esquerda
     latch();
+
+    // Envia o número pela UART
+    char msg[10];
+    snprintf(msg, sizeof(msg), "%d\r\n", num);  // formata "num\n"
+    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+}
+
+void ajustarDificuldade()
+{
+    uint32_t novoPeriodo;
+    if (pontuacao < 10)
+        novoPeriodo = DIFICULDADEMINIMA;
+    else if (pontuacao < 20)
+        novoPeriodo = DIFICULDADEMEDIA;
+    else if (pontuacao < 30)
+        novoPeriodo = DIFICULDADEMAXIMA;
+    else {
+        // reinicia jogo
+        pontuacao = 0;
+        novoPeriodo = DIFICULDADEMINIMA;
+    }
+
+    __HAL_TIM_SET_AUTORELOAD(&htim3, novoPeriodo);
+    __HAL_TIM_SET_COUNTER(&htim3, 0);
 }
 
 void resetPontos()
@@ -107,35 +143,45 @@ void resetPontos()
 
 int main(void)
 {
-    HAL_Init();
+	HAL_Init();
     SystemClock_Config();
     MX_GPIO_Init();
     MX_TIM2_Init();
+    MX_TIM3_Init();
     MX_GPIO_Display_Init();
+    MX_USART1_UART_Init();
 
     srand(HAL_GetTick());
+
     HAL_TIM_Base_Start_IT(&htim2);
+    HAL_TIM_Base_Start_IT(&htim3);
 
     resetPontos();
 
     while (1)
     {
-    	if (flagResetPorTimeout) {
-    	    resetPontos();
-    	    flagResetPorTimeout = false;
+    	if (flagResetPorTimeout)
+    	{
+    		resetPontos();
+      	    flagResetPorTimeout = false;
+      	}
+    	if (flagMudaLED)
+    	{
+    		novoLED();
+    	    flagMudaLED = false;
     	}
-        // PA0
-    	flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0);
-        // PA1
-    	flagsBotoes[1] = lerBotaoDebounce(GPIOA, GPIO_PIN_1);
-        // PA2
-    	flagsBotoes[2] = lerBotaoDebounce(GPIOA, GPIO_PIN_2);
-        // PA3
-    	flagsBotoes[3] = lerBotaoDebounce(GPIOA, GPIO_PIN_3);
-        // PA4
-    	flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
+          // PA0
+      	flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0);
+          // PA1
+      	flagsBotoes[1] = lerBotaoDebounce(GPIOA, GPIO_PIN_1);
+          // PA2
+      	flagsBotoes[2] = lerBotaoDebounce(GPIOA, GPIO_PIN_2);
+          // PA3
+      	flagsBotoes[3] = lerBotaoDebounce(GPIOA, GPIO_PIN_3);
+          // PA4
+      	flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
 
-    	//Verifica botões e desvia para ver resultado
+      	//Verifica botões e desvia para ver resultado
         if (flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4])
         {
         	__HAL_TIM_SET_COUNTER(&htim2, 0);  // Zera o contador
@@ -147,24 +193,26 @@ int main(void)
             if (erro == false)
             {
                 pontuacao = pontuacao + 1;
+                ajustarDificuldade();
             }
             display_write(pontuacao);
             erro = false;
-        	//Garante que o jogador soltou os botões antes de continuar
-        	while ((flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4]))
-        	{
-        		flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0);
-        	    flagsBotoes[1] = lerBotaoDebounce(GPIOA, GPIO_PIN_1);
-        	    flagsBotoes[2] = lerBotaoDebounce(GPIOA, GPIO_PIN_2);
-        	    flagsBotoes[3] = lerBotaoDebounce(GPIOA, GPIO_PIN_3);
-        	    flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
-        	}
-        	__HAL_TIM_SET_COUNTER(&htim2, 0);  // Zera o contador
+          	//Garante que o jogador soltou os botões antes de continuar
+          	while ((flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4]))
+          	{
+          		flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0);
+          	    flagsBotoes[1] = lerBotaoDebounce(GPIOA, GPIO_PIN_1);
+          	    flagsBotoes[2] = lerBotaoDebounce(GPIOA, GPIO_PIN_2);
+          	    flagsBotoes[3] = lerBotaoDebounce(GPIOA, GPIO_PIN_3);
+          	    flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
+          	}
+          	__HAL_TIM_SET_COUNTER(&htim2, 0);  // Zera o contador
             novoLED();
         }
     }
     return 0;
 }
+
 
 void SystemClock_Config(void)
 {
@@ -178,30 +226,30 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
-  HAL_RCC_OscConfig(&RCC_OscInitStruct);
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
-                              | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-  HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2);
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
+
+
 
 static void MX_TIM2_Init(void)
 {
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 7199;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
@@ -210,23 +258,58 @@ static void MX_TIM2_Init(void)
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
   {
-    //Error_Handler();
+    Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
   if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
   {
-    //Error_Handler();
+    Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
   {
-    //Error_Handler();
+    Error_Handler();
   }
-  /* USER CODE BEGIN TIM2_Init 2 */
+}
 
-  /* USER CODE END TIM2_Init 2 */
+static void MX_TIM3_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
 
+  __HAL_RCC_TIM3_CLK_ENABLE();
+
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 7199;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = DIFICULDADEMINIMA;  // Começa com dificuldade mínima (1500ms)
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK) Error_Handler();
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig);
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig);
+}
+
+static void MX_USART1_UART_Init(void)
+{
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 9600;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 static void MX_GPIO_Display_Init(void)
@@ -288,4 +371,16 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     {
     	flagResetPorTimeout = true;
     }
+    if (htim->Instance == TIM3)
+    {
+        flagMudaLED = true;
+    }
+}
+
+void Error_Handler(void)
+{
+  __disable_irq();
+  while (1)
+  {
+  }
 }
