@@ -109,11 +109,13 @@ void display_write(uint8_t num)
     send_byte(digits[digit1]);     // primeiro o dígito da direita
     send_byte(digits[digit2]);     // depois o da esquerda
     latch();
+}
 
-    // Envia o número pela UART
-    char msg[10];
-    snprintf(msg, sizeof(msg), "%d\r\n", num);  // formata "num\n"
-    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+void display_clear()
+{
+    send_byte(0xFF); // Apaga o dígito da direita
+    send_byte(0xFF); // Apaga o dígito da esquerda
+    latch();
 }
 
 void ajustarDificuldade()
@@ -127,7 +129,7 @@ void ajustarDificuldade()
         novoPeriodo = DIFICULDADEMAXIMA;
     else {
         // reinicia jogo
-        pontuacao = 0;
+        fimDeJogo();
         novoPeriodo = DIFICULDADEMINIMA;
     }
 
@@ -139,6 +141,18 @@ void resetPontos()
 {
 	pontuacao = 0;
 	display_write(0);
+}
+
+void fimDeJogo()
+{
+	for(int i = 0; i < 3; i++)
+	{
+		display_clear();
+		HAL_Delay(500);
+		display_write(pontuacao);
+		HAL_Delay(500);
+	}
+	resetPontos();
 }
 
 int main(void)
@@ -162,9 +176,11 @@ int main(void)
     {
     	if (flagResetPorTimeout)
     	{
-    		resetPontos();
-      	    flagResetPorTimeout = false;
-      	}
+    	    const char* msg = "Inatividade detectada! Jogo reiniciado.\r\n";
+    	    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+    	    fimDeJogo();
+    	    flagResetPorTimeout = false;
+    	}
     	if (flagMudaLED)
     	{
     		novoLED();
@@ -184,17 +200,33 @@ int main(void)
       	//Verifica botões e desvia para ver resultado
         if (flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4])
         {
-        	__HAL_TIM_SET_COUNTER(&htim2, 0);  // Zera o contador
+        	uint32_t tempoResposta = __HAL_TIM_GET_COUNTER(&htim2);  // Tempo desde o novo LED
+        	HAL_TIM_Base_Stop(&htim2); // Para o timer momentaneamente
             bool erro = false;
             for (int i = 0; i < 5; i++)
             {
                 if (flagsBotoes[i] != flagsLEDs[i]) erro = true;
             }
+
+            char msg[50];
+
             if (erro == false)
             {
                 pontuacao = pontuacao + 1;
                 ajustarDificuldade();
+                snprintf(msg, sizeof(msg), "Tempo: %lu ms\r\n", tempoResposta);
+                // Envia o número pela UART
+                char msg[10];
+                snprintf(msg, sizeof(msg), "%d\r\n", pontuacao);  // formata "num\n"
+                HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
             }
+            else
+            {
+            	snprintf(msg, sizeof(msg), "Erro! LED errado!\r\n");
+            }
+
+            HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+
             display_write(pontuacao);
             erro = false;
           	//Garante que o jogador soltou os botões antes de continuar
@@ -206,7 +238,8 @@ int main(void)
           	    flagsBotoes[3] = lerBotaoDebounce(GPIOA, GPIO_PIN_3);
           	    flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
           	}
-          	__HAL_TIM_SET_COUNTER(&htim2, 0);  // Zera o contador
+          	__HAL_TIM_SET_COUNTER(&htim2, 0);  // Zera cronômetro
+          	HAL_TIM_Base_Start(&htim2);        // Reinicia para detectar inatividade
             novoLED();
         }
     }
@@ -251,7 +284,7 @@ static void MX_TIM2_Init(void)
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 7199;
+  htim2.Init.Prescaler = 14399;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 49999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
