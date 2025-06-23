@@ -2,35 +2,18 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
-//#define velMIN 150
-//#define velMED 100
-//#define velMAX 50
+TIM_HandleTypeDef htim2;
 
 void SystemClock_Config(void);
 static void MX_GPIO_Display_Init(void);
 static void MX_GPIO_Init(void);
+static void MX_TIM2_Init(void);
 
 //Endereços 0-4 botões e LEDs individuais
 bool flagsBotoes[5] = {false};
 bool flagsLEDs[5] = {false};
-
-void EXTI9_5_IRQHandler(void);
-
-void resetPontos(void);
-
-void configBotaoInterrup(void)
-{
-	GPIO_InitTypeDef GPIO_InitStruct = {0};
-	//__HAL_RCC_GPIOB_CLK_ENEABLE();
-
-	GPIO_InitStruct.Pin = GPIO_PIN_7;
-	GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-	GPIO_InitStruct.Speed = GPIO_PULLUP;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-	HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
-	HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
-}
+uint8_t pontuacao = 0;
+volatile bool flagResetPorTimeout = false;
 
 bool lerBotaoDebounce(GPIO_TypeDef* porta, uint16_t pino)
 {
@@ -47,16 +30,6 @@ bool lerBotaoDebounce(GPIO_TypeDef* porta, uint16_t pino)
 
 void novoLED()
 {
-	//Garante que o jogador soltou os botões antes de continuar
-	while ((flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4]))
-	{
-		flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0);
-	    flagsBotoes[1] = lerBotaoDebounce(GPIOA, GPIO_PIN_1);
-	    flagsBotoes[2] = lerBotaoDebounce(GPIOA, GPIO_PIN_2);
-	    flagsBotoes[3] = lerBotaoDebounce(GPIOA, GPIO_PIN_3);
-	    flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
-	}
-
 	static int ultimoLED = -1;
     flagsLEDs[ultimoLED] = false;
     int aux;
@@ -128,17 +101,8 @@ void display_write(uint8_t num)
 
 void resetPontos()
 {
+	pontuacao = 0;
 	display_write(0);
-}
-
-void EXTI9_5_IRQHandler(void)
-{
-    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_7);  // Chama o callback da HAL
-    if(__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_7) != RESET)
-    {
-    	__HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_7);
-    	resetPontos();
-    }
 }
 
 int main(void)
@@ -146,16 +110,20 @@ int main(void)
     HAL_Init();
     SystemClock_Config();
     MX_GPIO_Init();
+    MX_TIM2_Init();
     MX_GPIO_Display_Init();
 
     srand(HAL_GetTick());
+    HAL_TIM_Base_Start_IT(&htim2);
 
-    configBotaoInterrup();
-
-    static uint8_t pontuacao = 0;
+    resetPontos();
 
     while (1)
     {
+    	if (flagResetPorTimeout) {
+    	    resetPontos();
+    	    flagResetPorTimeout = false;
+    	}
         // PA0
     	flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0);
         // PA1
@@ -170,6 +138,7 @@ int main(void)
     	//Verifica botões e desvia para ver resultado
         if (flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4])
         {
+        	__HAL_TIM_SET_COUNTER(&htim2, 0);  // Zera o contador
             bool erro = false;
             for (int i = 0; i < 5; i++)
             {
@@ -181,7 +150,16 @@ int main(void)
             }
             display_write(pontuacao);
             erro = false;
-
+        	//Garante que o jogador soltou os botões antes de continuar
+        	while ((flagsBotoes[0] || flagsBotoes[1] || flagsBotoes[2] || flagsBotoes[3] || flagsBotoes[4]))
+        	{
+        		flagsBotoes[0] = lerBotaoDebounce(GPIOA, GPIO_PIN_0);
+        	    flagsBotoes[1] = lerBotaoDebounce(GPIOA, GPIO_PIN_1);
+        	    flagsBotoes[2] = lerBotaoDebounce(GPIOA, GPIO_PIN_2);
+        	    flagsBotoes[3] = lerBotaoDebounce(GPIOA, GPIO_PIN_3);
+        	    flagsBotoes[4] = lerBotaoDebounce(GPIOA, GPIO_PIN_4);
+        	}
+        	__HAL_TIM_SET_COUNTER(&htim2, 0);  // Zera o contador
             novoLED();
         }
     }
@@ -209,6 +187,46 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
   HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2);
+}
+
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 7199;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 49999;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    //Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    //Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    //Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+
 }
 
 static void MX_GPIO_Display_Init(void)
@@ -249,7 +267,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-
   // Saídas PB5–PB6 PB8-PB9
   GPIO_InitStruct.Pin = GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_8 | GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -257,10 +274,18 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9 | GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_8, GPIO_PIN_RESET); // LED inicialmente apagado
 
-  // Saída PA10
+  // Saída PA7
   GPIO_InitStruct.Pin = GPIO_PIN_7;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); // LED inicialmente apagado
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM2)
+    {
+    	flagResetPorTimeout = true;
+    }
 }
