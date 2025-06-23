@@ -14,6 +14,24 @@ static void MX_GPIO_Init(void);
 bool flagsBotoes[5] = {false};
 bool flagsLEDs[5] = {false};
 
+void EXTI9_5_IRQHandler(void);
+
+void resetPontos(void);
+
+void configBotaoInterrup(void)
+{
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
+	//__HAL_RCC_GPIOB_CLK_ENEABLE();
+
+	GPIO_InitStruct.Pin = GPIO_PIN_7;
+	GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+	GPIO_InitStruct.Speed = GPIO_PULLUP;
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+	HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+	HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+}
+
 bool lerBotaoDebounce(GPIO_TypeDef* porta, uint16_t pino)
 {
     if (HAL_GPIO_ReadPin(porta, pino) == GPIO_PIN_RESET)
@@ -108,6 +126,21 @@ void display_write(uint8_t num)
     latch();
 }
 
+void resetPontos()
+{
+	display_write(0);
+}
+
+void EXTI9_5_IRQHandler(void)
+{
+    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_7);  // Chama o callback da HAL
+    if(__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_7) != RESET)
+    {
+    	__HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_7);
+    	resetPontos();
+    }
+}
+
 int main(void)
 {
     HAL_Init();
@@ -116,6 +149,8 @@ int main(void)
     MX_GPIO_Display_Init();
 
     srand(HAL_GetTick());
+
+    configBotaoInterrup();
 
     static uint8_t pontuacao = 0;
 
